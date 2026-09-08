@@ -1,0 +1,8 @@
+# Normalise line endings so scripts, YAML, and heredoc-generated files behave the
+# same on Windows checkouts (CRLF in a .ts or .yml is harmless; in a Dockerfile
+# CMD or a git hook it is not).
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff2 binary

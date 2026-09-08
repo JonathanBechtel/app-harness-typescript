@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+app/migrations/
+app/static/
+package-lock.json
+complexity-baseline.json
+*.md
+.claude/worktrees/
+.codex/

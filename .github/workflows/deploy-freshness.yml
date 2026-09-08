@@ -1,0 +1,31 @@
+name: Deploy freshness
+
+# Scheduled OBSERVATION, not a gate: a red run means "someone should look".
+# Fails if the deployment at DEPLOY_URL reports a releaseSha more than
+# max_age_hours behind main, or if /health/db is unhealthy.
+
+on:
+  schedule:
+    - cron: '0 13 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      max_age_hours:
+        default: '72'
+
+permissions:
+  contents: read
+
+jobs:
+  freshness:
+    if: ${{ vars.DEPLOY_URL != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: npm }
+      - run: npm ci --no-audit --no-fund
+      - name: Release drift
+        run: npx tsx scripts/check-deploy-freshness.ts --url "${{ vars.DEPLOY_URL }}" --against origin/main --max-age-hours "${{ inputs.max_age_hours || '72' }}"
+      - name: Database readiness
+        run: curl -fsS "${{ vars.DEPLOY_URL }}/health/db"

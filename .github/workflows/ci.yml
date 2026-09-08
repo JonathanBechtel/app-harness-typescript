@@ -1,0 +1,141 @@
+name: CI
+
+# Every guard here is mirrored in lint-staged.config.js and tasks.ts.
+# Hooks are bypassable; this is the enforcing copy.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+  # CI runs against an ephemeral service container, so app and test DB may match.
+  DATABASE_URL: postgresql://postgres:postgres@localhost:5432/app_test
+  TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/app_test
+  TEST_ALLOW_DB: '1'
+  TEST_ALLOW_TEST_DB_EQUALS_DATABASE_URL: '1'
+  TEST_REQUIRE_DB: '1'
+  APP_ENV: stage
+  SECRET_KEY: ci-only-not-a-secret
+
+jobs:
+  changes:
+    # Docs-only PRs skip the heavy jobs. Allowlist, not denylist: a new file
+    # defaults to running everything. Gated at JOB level so skipped jobs still
+    # satisfy required checks.
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - id: filter
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then echo "code=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          changed="$(git diff --name-only "${{ github.event.pull_request.base.sha }}...${{ github.sha }}")"
+          non_docs="$(printf '%s\n' "$changed" | grep -vE '^(docs/|[^/]+\.md$)' || true)"
+          if [ -n "$changed" ] && [ -z "$non_docs" ]; then echo "code=false" >> "$GITHUB_OUTPUT"; else echo "code=true" >> "$GITHUB_OUTPUT"; fi
+
+  checks:
+    # Whole-repo static analysis and the guard scripts, run once.
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: postgres, POSTGRES_DB: app_test }
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 10
+        ports: ['5432:5432']
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 } # diff-scoped guards compare against the PR base
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: npm }
+      - name: Install
+        run: npm ci --no-audit --no-fund
+      - name: Resolve diff base
+        id: base
+        run: |
+          # PRs diff against the base branch. Pushes diff against the previous commit
+          # (github.event.before is the null sha on a first push or after a force-push;
+          # the guards fall back to the empty tree when a ref does not exist).
+          if [ "${{ github.event_name }}" = "pull_request" ]; then echo "ref=origin/${{ github.base_ref }}" >> "$GITHUB_OUTPUT"; else echo "ref=HEAD~1" >> "$GITHUB_OUTPUT"; fi
+      - name: Format check
+        run: npm run fmt.check
+      - name: Whole-tree checks (eslint, tsc, import contracts, ratchets, guards, docs)
+        run: npm run checks
+      - name: File-size ratchet (enforced against base)
+        run: npx tsx scripts/check-file-size-ratchet.ts --against ${{ steps.base.outputs.ref }} --enforce
+      - name: Migration safety
+        run: npx tsx scripts/check-migration-safety.ts --against ${{ steps.base.outputs.ref }}
+      - name: Duplicate-code gate
+        run: npx tsx scripts/check-duplicate-code.ts --against ${{ steps.base.outputs.ref }}
+      - name: Test titles
+        run: npx tsx scripts/check-test-titles.ts --against ${{ steps.base.outputs.ref }}
+      - name: Test float comparisons
+        run: npx tsx scripts/check-test-float-comparisons.ts --against ${{ steps.base.outputs.ref }}
+      - name: Migration round-trip (fresh database -> migrate -> migrate again is a no-op -> schema/revision drift)
+        run: |
+          npx tsx app/cli/migrate.ts
+          npx tsx app/cli/migrate.ts
+          npx tsx scripts/check-migration-drift.ts
+      - name: 'Guard meta-tests (no coverage: whole-tree scans under instrumentation are slower and measure no app/ code)'
+        run: npx vitest run --project unit tests/unit/check-*.test.ts tests/unit/guard-wiring.test.ts
+
+  tests:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: postgres, POSTGRES_DB: app_test }
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 10
+        ports: ['5432:5432']
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 } # patch coverage compares against the base
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: npm }
+      - name: Install
+        run: npm ci --no-audit --no-fund
+      - name: Migrate
+        run: npx tsx app/cli/migrate.ts
+      - name: Unit + integration tests with coverage
+        run: npx vitest run --coverage --coverage.reporter=lcov --coverage.reporter=text
+      - name: Patch coverage gate (>= 80% of changed app/ lines)
+        if: github.event_name == 'pull_request'
+        run: npx tsx scripts/check-patch-coverage.ts --against origin/${{ github.base_ref }} --fail-under 80
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: coverage-lcov, path: coverage/lcov.info, retention-days: 7 }
+
+  image:
+    # Prove the deployable artifact builds on every PR; publishing happens in build-image.yml.
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          build-args: GIT_SHA=${{ github.sha }}
+          tags: app-harness:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

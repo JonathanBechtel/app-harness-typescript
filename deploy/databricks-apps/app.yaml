@@ -1,0 +1,19 @@
+# Databricks Apps run configuration. Copied to the bundle root by the deploy
+# workflow (which ships a prebuilt dist/). DATABRICKS_APP_PORT is substituted by
+# the platform at runtime.
+command:
+  - sh
+  - -c
+  - node dist/app/cli/migrate.js && PORT=$DATABRICKS_APP_PORT node dist/app/main.js
+env:
+  - name: APP_ENV
+    value: stage
+  - name: LOG_JSON
+    value: '1'
+  - name: NODE_ENV
+    value: production
+  # Secrets come from Databricks secret scopes / app resources, never literals:
+  # - name: DATABASE_URL
+  #   valueFrom: database-url
+  # - name: SECRET_KEY
+  #   valueFrom: secret-key

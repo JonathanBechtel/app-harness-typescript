@@ -1,0 +1,30 @@
+# What the image needs is narrow: package.json + lockfile (to install), the `app`
+# tree (to build), and tsconfig*.json. Everything else is developer- or CI-facing.
+#
+# Excluding a directory here makes it ABSENT AT RUNTIME. A module under app/ that
+# reads a file from one of these paths breaks in the container while CI, the
+# build, and the deploy all stay green. scripts/check-runtime-entrypoints.ts reads
+# this file and fails (E3) if anything under app/ references an excluded path, so
+# the two cannot drift. Add a directory here only after that guard passes.
+
+.git/
+.github/
+.claude/
+.codex/
+.agents/
+.vscode/
+.husky/
+node_modules/
+dist/
+coverage/
+.env*
+!.env.example
+.envrc
+*.log
+
+# Developer and CI trees — never executed inside the container.
+scripts/
+tests/
+docs/
+deploy/
+evals/

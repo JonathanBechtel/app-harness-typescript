@@ -1,0 +1,13 @@
+{
+  // The shipped package only. `npm run build` compiles app/ to dist/app and copies
+  // templates, static assets, migrations and data alongside (tasks.ts `build`).
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "dist",
+    "sourceMap": true,
+    "declaration": false
+  },
+  "include": ["app"],
+  "exclude": ["node_modules", "dist", "app/static", "**/*.test.ts"]
+}

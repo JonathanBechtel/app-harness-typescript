@@ -1,0 +1,31 @@
+# Environments and secrets — never commit. `.env*` with an explicit allowlist so a
+# new variant (.env.qa.local, .env.bak) is ignored by default.
+.env*
+!.env.example
+.envrc
+.claude/settings.local.json
+.claude/worktrees/
+.codex/worktrees/
+.codex/environments/
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Tooling caches and reports
+coverage/
+.eslintcache
+.jscpd/
+
+# Test and eval artifacts
+tests/e2e/screenshots/
+test-results/
+playwright-report/
+evals/results/
+.playwright-mcp/
+
+# OS / editor
+.DS_Store
+.idea/
+*.log
